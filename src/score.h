@@ -16,17 +16,50 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef BENCHMARK_H_INCLUDED
-#define BENCHMARK_H_INCLUDED
+#ifndef SCORE_H_INCLUDED
+#define SCORE_H_INCLUDED
 
-#include <iosfwd>
-#include <string>
-#include <vector>
+#include <variant>
+#include <utility>
 
-namespace Stockfish::Benchmark {
+#include "types.h"
 
-std::vector<std::string> setup_bench(const std::string&, std::istream&);
+namespace Stockfish {
 
-}  // namespace Stockfish
+class Position;
 
-#endif  // #ifndef BENCHMARK_H_INCLUDED
+class Score {
+   public:
+    struct Mate {
+        int plies;
+    };
+
+    struct InternalUnits {
+        int value;
+    };
+
+    Score() = default;
+    Score(Value v, const Position& pos);
+
+    template<typename T>
+    bool is() const {
+        return std::holds_alternative<T>(score);
+    }
+
+    template<typename T>
+    T get() const {
+        return std::get<T>(score);
+    }
+
+    template<typename F>
+    decltype(auto) visit(F&& f) const {
+        return std::visit(std::forward<F>(f), score);
+    }
+
+   private:
+    std::variant<Mate, InternalUnits> score;
+};
+
+}
+
+#endif  // #ifndef SCORE_H_INCLUDED

@@ -59,16 +59,16 @@ PGOBENCH = $(WINE_PATH) ./$(EXE) bench
 SRCS = benchmark.cpp bitboard.cpp evaluate.cpp main.cpp \
 	misc.cpp movegen.cpp movepick.cpp position.cpp \
 	search.cpp thread.cpp timeman.cpp tt.cpp uci.cpp ucioption.cpp tune.cpp \
-	nnue/evaluate_nnue.cpp nnue/features/half_ka_v2_hm.cpp \
+	nnue/nnue_misc.cpp nnue/features/half_ka_v2_hm.cpp nnue/network.cpp engine.cpp score.cpp \
 	external/zip.cpp emscripten/wasm_simd.cpp
 
 HEADERS = benchmark.h bitboard.h evaluate.h misc.h movegen.h movepick.h magics.h \
-           nnue/evaluate_nnue.h nnue/features/half_ka_v2_hm.h nnue/layers/affine_transform.h \
+           nnue/nnue_misc.h nnue/features/half_ka_v2_hm.h nnue/layers/affine_transform.h \
            nnue/layers/affine_transform_sparse_input.h nnue/layers/clipped_relu.h nnue/layers/simd.h \
            nnue/layers/sqr_clipped_relu.h nnue/nnue_accumulator.h nnue/nnue_architecture.h \
            nnue/nnue_common.h nnue/nnue_feature_transformer.h position.h \
            search.h thread.h thread_win32_osx.h timeman.h \
-           tt.h tune.h types.h uci.h ucioption.h perft.h \
+           tt.h tune.h types.h uci.h ucioption.h perft.h nnue/network.h engine.h score.h \
            external/zip.h external/miniz.h
 
 OBJS = $(notdir $(SRCS:.cpp=.o))
@@ -667,11 +667,6 @@ else
 	endif
 endif
 
-### Travis CI script uses COMPILER to overwrite CXX
-ifdef COMPILER
-	COMPCXX=$(COMPILER)
-endif
-
 ### Allow overwriting CXX from command line
 ifdef COMPCXX
 	CXX=$(COMPCXX)
@@ -941,6 +936,7 @@ help:
 	@echo "help                    > Display architecture details"
 	@echo "profile-build           > standard build with profile-guided optimization"
 	@echo "build                   > skip profile-guided optimization"
+	@echo "net                     > Download the default nnue nets"
 	@echo "strip                   > Strip executable"
 	@echo "install                 > Install executable"
 	@echo "clean                   > Clean up"
@@ -1066,6 +1062,39 @@ profileclean:
 	@rm -f pikafish.*lt*
 	@rm -f pikafish.res
 	@rm -f ./-lstdc++.res
+
+define fetch_network
+	@echo "Default net: $(nnuenet)"
+	@if [ "x$(curl_or_wget)" = "x" ]; then \
+		echo "Neither curl nor wget is installed. Install one of these tools unless the net has been downloaded manually"; \
+	fi; \
+
+	@if test -f "$(nnuenet)"; then \
+		echo "$(nnuenet) available : OK"; \
+	else \
+		if [ "x$(curl_or_wget)" != "x" ]; then \
+			echo "Downloading $(nnuedownloadurl)"; $(curl_or_wget) $(nnuedownloadurl) > $(nnuenet);\
+		else \
+			echo "No net found and download not possible"; exit 1;\
+		fi; \
+	fi; \
+
+	@if ! test -f "$(nnuenet)"; then \
+		echo "Failed to download $(nnuenet)."; \
+	fi;
+endef
+
+# set up shell variables for the net stuff
+define netvariables
+$(eval nnuenet := pikafish.nnue)
+$(eval nnuedownloadurl := https://github.com/official-pikafish/Networks/releases/download/master-net/$(nnuenet))
+$(eval curl_or_wget := $(shell if hash curl 2>/dev/null; then echo "curl -skL"; elif hash wget 2>/dev/null; then echo "wget -qO-"; fi))
+endef
+
+# evaluation network (nnue)
+net:
+	$(call netvariables)
+	$(call fetch_network)
 
 format:
 	$(CLANG-FORMAT) -i $(SRCS) $(HEADERS) -style=file

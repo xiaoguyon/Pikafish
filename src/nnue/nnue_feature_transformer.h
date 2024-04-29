@@ -48,61 +48,7 @@ using PSQTWeightType = std::int32_t;
 static_assert(PSQTBuckets % 8 == 0,
               "Per feature PSQT values cannot be processed at granularity lower than 8 at a time.");
 
-#ifdef USE_AVX512F
-using vec_t      = __m512i;
-using psqt_vec_t = __m256i;
-    #define vec_load(a) _mm512_load_si512(a)
-    #define vec_store(a, b) _mm512_store_si512(a, b)
-    #define vec_add_16(a, b) \
-        __builtin_shufflevector(_mm256_add_epi16(__builtin_shufflevector(a, a, 0, 1, 2, 3), \
-                                                 __builtin_shufflevector(b, b, 0, 1, 2, 3)), \
-                                _mm256_add_epi16(__builtin_shufflevector(a, a, 4, 5, 6, 7), \
-                                                 __builtin_shufflevector(b, b, 4, 5, 6, 7)), \
-                                0, 1, 2, 3, 4, 5, 6, 7)
-    #define vec_sub_16(a, b) \
-        __builtin_shufflevector(_mm256_sub_epi16(__builtin_shufflevector(a, a, 0, 1, 2, 3), \
-                                                 __builtin_shufflevector(b, b, 0, 1, 2, 3)), \
-                                _mm256_sub_epi16(__builtin_shufflevector(a, a, 4, 5, 6, 7), \
-                                                 __builtin_shufflevector(b, b, 4, 5, 6, 7)), \
-                                0, 1, 2, 3, 4, 5, 6, 7)
-    #define vec_mul_16(a, b) \
-        __builtin_shufflevector(_mm256_mullo_epi16(__builtin_shufflevector(a, a, 0, 1, 2, 3), \
-                                                   __builtin_shufflevector(b, b, 0, 1, 2, 3)), \
-                                _mm256_mullo_epi16(__builtin_shufflevector(a, a, 4, 5, 6, 7), \
-                                                   __builtin_shufflevector(b, b, 4, 5, 6, 7)), \
-                                0, 1, 2, 3, 4, 5, 6, 7)
-    #define vec_zero() _mm512_setzero_epi32()
-    #define vec_set_16(a) _mm512_set1_epi16(a)
-    #define vec_max_16(a, b) \
-        __builtin_shufflevector(_mm256_max_epi16(__builtin_shufflevector(a, a, 0, 1, 2, 3), \
-                                                 __builtin_shufflevector(b, b, 0, 1, 2, 3)), \
-                                _mm256_max_epi16(__builtin_shufflevector(a, a, 4, 5, 6, 7), \
-                                                 __builtin_shufflevector(b, b, 4, 5, 6, 7)), \
-                                0, 1, 2, 3, 4, 5, 6, 7)
-    #define vec_min_16(a, b) \
-        __builtin_shufflevector(_mm256_min_epi16(__builtin_shufflevector(a, a, 0, 1, 2, 3), \
-                                                 __builtin_shufflevector(b, b, 0, 1, 2, 3)), \
-                                _mm256_min_epi16(__builtin_shufflevector(a, a, 4, 5, 6, 7), \
-                                                 __builtin_shufflevector(b, b, 4, 5, 6, 7)), \
-                                0, 1, 2, 3, 4, 5, 6, 7)
-inline vec_t vec_msb_pack_16(vec_t a, vec_t b) {
-    vec_t compacted = __builtin_shufflevector(
-      _mm256_packs_epi16(_mm256_srli_epi16(__builtin_shufflevector(a, a, 0, 1, 2, 3), 7),
-                         _mm256_srli_epi16(__builtin_shufflevector(b, b, 0, 1, 2, 3), 7)),
-      _mm256_packs_epi16(_mm256_srli_epi16(__builtin_shufflevector(a, a, 4, 5, 6, 7), 7),
-                         _mm256_srli_epi16(__builtin_shufflevector(b, b, 4, 5, 6, 7), 7)),
-      0, 1, 2, 3, 4, 5, 6, 7);
-    return _mm512_permutexvar_epi64(_mm512_setr_epi64(0, 2, 4, 6, 1, 3, 5, 7), compacted);
-}
-    #define vec_load_psqt(a) _mm256_load_si256(a)
-    #define vec_store_psqt(a, b) _mm256_store_si256(a, b)
-    #define vec_add_psqt_32(a, b) _mm256_add_epi32(a, b)
-    #define vec_sub_psqt_32(a, b) _mm256_sub_epi32(a, b)
-    #define vec_zero_psqt() _mm256_setzero_si256()
-    #define NumRegistersSIMD 16
-    #define MaxChunkSize 64
-
-#elif USE_AVX512
+#ifdef USE_AVX512
 using vec_t      = __m512i;
 using psqt_vec_t = __m256i;
     #define vec_load(a) _mm512_load_si512(a)
@@ -114,10 +60,43 @@ using psqt_vec_t = __m256i;
     #define vec_set_16(a) _mm512_set1_epi16(a)
     #define vec_max_16(a, b) _mm512_max_epi16(a, b)
     #define vec_min_16(a, b) _mm512_min_epi16(a, b)
-inline vec_t vec_msb_pack_16(vec_t a, vec_t b) {
-    vec_t compacted = _mm512_packs_epi16(_mm512_srli_epi16(a, 7), _mm512_srli_epi16(b, 7));
-    return _mm512_permutexvar_epi64(_mm512_setr_epi64(0, 2, 4, 6, 1, 3, 5, 7), compacted);
-}
+    // Inverse permuted at load time
+    #define vec_msb_pack_16(a, b) \
+        _mm512_packs_epi16(_mm512_srli_epi16(a, 7), _mm512_srli_epi16(b, 7))
+    #define vec_load_psqt(a) _mm256_load_si256(a)
+    #define vec_store_psqt(a, b) _mm256_store_si256(a, b)
+    #define vec_add_psqt_32(a, b) _mm256_add_epi32(a, b)
+    #define vec_sub_psqt_32(a, b) _mm256_sub_epi32(a, b)
+    #define vec_zero_psqt() _mm256_setzero_si256()
+    #define NumRegistersSIMD 16
+    #define MaxChunkSize 64
+
+#elif USE_AVX512F
+using vec_t      = __m512i;
+using psqt_vec_t = __m256i;
+    #define vec_op(op, a, b) \
+        __builtin_shufflevector(op(__builtin_shufflevector(a, a, 0, 1, 2, 3), \
+                                   __builtin_shufflevector(b, b, 0, 1, 2, 3)), \
+                                op(__builtin_shufflevector(a, a, 4, 5, 6, 7), \
+                                   __builtin_shufflevector(b, b, 4, 5, 6, 7)), \
+                                0, 1, 2, 3, 4, 5, 6, 7)
+    #define vec_load(a) _mm512_load_si512(a)
+    #define vec_store(a, b) _mm512_store_si512(a, b)
+    #define vec_add_16(a, b) vec_op(_mm256_add_epi16, a, b)
+    #define vec_sub_16(a, b) vec_op(_mm256_sub_epi16, a, b)
+    #define vec_mul_16(a, b) vec_op(_mm256_mullo_epi16, a, b)
+    #define vec_zero() _mm512_setzero_epi32()
+    #define vec_set_16(a) _mm512_set1_epi16(a)
+    #define vec_max_16(a, b) vec_op(_mm256_max_epi16, a, b)
+    #define vec_min_16(a, b) vec_op(_mm256_min_epi16, a, b)
+    // Inverse permuted at load time
+    #define vec_msb_pack_16(a, b) \
+        __builtin_shufflevector( \
+          _mm256_packs_epi16(_mm256_srli_epi16(__builtin_shufflevector(a, a, 0, 1, 2, 3), 7), \
+                             _mm256_srli_epi16(__builtin_shufflevector(b, b, 0, 1, 2, 3), 7)), \
+          _mm256_packs_epi16(_mm256_srli_epi16(__builtin_shufflevector(a, a, 4, 5, 6, 7), 7), \
+                             _mm256_srli_epi16(__builtin_shufflevector(b, b, 4, 5, 6, 7), 7)), \
+          0, 1, 2, 3, 4, 5, 6, 7)
     #define vec_load_psqt(a) _mm256_load_si256(a)
     #define vec_store_psqt(a, b) _mm256_store_si256(a, b)
     #define vec_add_psqt_32(a, b) _mm256_add_epi32(a, b)
@@ -138,10 +117,9 @@ using psqt_vec_t = __m256i;
     #define vec_set_16(a) _mm256_set1_epi16(a)
     #define vec_max_16(a, b) _mm256_max_epi16(a, b)
     #define vec_min_16(a, b) _mm256_min_epi16(a, b)
-inline vec_t vec_msb_pack_16(vec_t a, vec_t b) {
-    vec_t compacted = _mm256_packs_epi16(_mm256_srli_epi16(a, 7), _mm256_srli_epi16(b, 7));
-    return _mm256_permute4x64_epi64(compacted, 0b11011000);
-}
+    // Inverse permuted at load time
+    #define vec_msb_pack_16(a, b) \
+        _mm256_packs_epi16(_mm256_srli_epi16(a, 7), _mm256_srli_epi16(b, 7))
     #define vec_load_psqt(a) _mm256_load_si256(a)
     #define vec_store_psqt(a, b) _mm256_store_si256(a, b)
     #define vec_add_psqt_32(a, b) _mm256_add_epi32(a, b)
@@ -274,10 +252,10 @@ static constexpr int NumPsqtRegs =
 // Input feature converter
 class FeatureTransformer {
 
-   private:
     // Number of output dimensions for one side
     static constexpr IndexType HalfDimensions = TransformedFeatureDimensions;
 
+   private:
 #ifdef VECTOR
     static constexpr IndexType TileHeight     = NumRegs * sizeof(vec_t) / 2;
     static constexpr IndexType PsqtTileHeight = NumPsqtRegs * sizeof(psqt_vec_t) / 4;
@@ -301,6 +279,56 @@ class FeatureTransformer {
         return FeatureSet::HashValue ^ (OutputDimensions * 2);
     }
 
+    static void order_packs([[maybe_unused]] uint64_t* v) {
+#if defined(USE_AVX2)
+        vec_t* vec  = reinterpret_cast<vec_t*>(v);
+        vec_t  vec0 = vec[0], vec1 = vec[1];
+    #if defined(USE_AVX512) || defined(USE_AVX512F)  // _mm512_packs_epi16 ordering
+        vec[0] = __builtin_shufflevector(vec0, vec1, 0, 1, 8, 9, 2, 3, 10, 11);
+        vec[1] = __builtin_shufflevector(vec0, vec1, 4, 5, 12, 13, 6, 7, 14, 15);
+    #else  // _mm256_packs_epi16 ordering
+        vec[0] = __builtin_shufflevector(vec0, vec1, 0, 1, 4, 5);
+        vec[1] = __builtin_shufflevector(vec0, vec1, 2, 3, 6, 7);
+    #endif
+#endif
+    }
+
+    static void inverse_order_packs([[maybe_unused]] uint64_t* v) {
+#if defined(USE_AVX2)
+        vec_t* vec  = reinterpret_cast<vec_t*>(v);
+        vec_t  vec0 = vec[0], vec1 = vec[1];
+    #if defined(USE_AVX512) || defined(USE_AVX512F)  // Inverse _mm512_packs_epi16 ordering
+        vec[0] = __builtin_shufflevector(vec0, vec1, 0, 1, 4, 5, 8, 9, 12, 13);
+        vec[1] = __builtin_shufflevector(vec0, vec1, 2, 3, 6, 7, 10, 11, 14, 15);
+    #else  // Inverse _mm256_packs_epi16 ordering
+        vec[0] = __builtin_shufflevector(vec0, vec1, 0, 1, 4, 5);
+        vec[1] = __builtin_shufflevector(vec0, vec1, 2, 3, 6, 7);
+    #endif
+#endif
+    }
+
+    void permute_weights([[maybe_unused]] void (*order_fn)(uint64_t*)) const {
+#if defined(USE_AVX2)
+    #if defined(USE_AVX512) || defined(USE_AVX512F)
+        constexpr IndexType di = 16;
+    #else
+        constexpr IndexType di = 8;
+    #endif
+        uint64_t* b = reinterpret_cast<uint64_t*>(const_cast<BiasType*>(&biases[0]));
+        for (IndexType i = 0; i < HalfDimensions * sizeof(BiasType) / sizeof(uint64_t); i += di)
+            order_fn(&b[i]);
+
+        for (IndexType j = 0; j < InputDimensions; ++j)
+        {
+            uint64_t* w =
+              reinterpret_cast<uint64_t*>(const_cast<WeightType*>(&weights[j * HalfDimensions]));
+            for (IndexType i = 0; i < HalfDimensions * sizeof(WeightType) / sizeof(uint64_t);
+                 i += di)
+                order_fn(&w[i]);
+        }
+#endif
+    }
+
     // Read network parameters
     bool read_parameters(std::istream& stream) {
 
@@ -308,23 +336,30 @@ class FeatureTransformer {
         read_leb_128<WeightType>(stream, weights, HalfDimensions * InputDimensions);
         read_leb_128<PSQTWeightType>(stream, psqtWeights, PSQTBuckets * InputDimensions);
 
+        permute_weights(inverse_order_packs);
         return !stream.fail();
     }
 
     // Write network parameters
     bool write_parameters(std::ostream& stream) const {
 
+        permute_weights(order_packs);
+
         write_leb_128<BiasType>(stream, biases, HalfDimensions);
         write_leb_128<WeightType>(stream, weights, HalfDimensions * InputDimensions);
         write_leb_128<PSQTWeightType>(stream, psqtWeights, PSQTBuckets * InputDimensions);
 
+        permute_weights(inverse_order_packs);
         return !stream.fail();
     }
 
     // Convert input features
-    std::int32_t transform(const Position& pos, OutputType* output, int bucket) const {
-        update_accumulator<WHITE>(pos);
-        update_accumulator<BLACK>(pos);
+    std::int32_t transform(const Position&           pos,
+                           AccumulatorCaches::Cache* cache,
+                           OutputType*               output,
+                           int                       bucket) const {
+        update_accumulator<WHITE>(pos, cache);
+        update_accumulator<BLACK>(pos, cache);
 
         const Color perspectives[2]  = {pos.side_to_move(), ~pos.side_to_move()};
         const auto& accumulation     = pos.state()->accumulator.accumulation;
@@ -345,8 +380,8 @@ class FeatureTransformer {
             static_assert((HalfDimensions / 2) % OutputChunkSize == 0);
             constexpr IndexType NumOutputChunks = HalfDimensions / 2 / OutputChunkSize;
 
-            vec_t Zero = vec_zero();
-            vec_t One  = vec_set_16(127);
+            const vec_t Zero = vec_zero();
+            const vec_t One  = vec_set_16(127);
 
             const vec_t* in0 = reinterpret_cast<const vec_t*>(&(accumulation[perspectives[p]][0]));
             const vec_t* in1 =
@@ -384,9 +419,9 @@ class FeatureTransformer {
         return psqt;
     }  // end of function transform()
 
-    void hint_common_access(const Position& pos) const {
-        hint_common_access_for_perspective<WHITE>(pos);
-        hint_common_access_for_perspective<BLACK>(pos);
+    void hint_common_access(const Position& pos, AccumulatorCaches::Cache* cache) const {
+        hint_common_access_for_perspective<WHITE>(pos, cache);
+        hint_common_access_for_perspective<BLACK>(pos, cache);
     }
 
    private:
@@ -649,31 +684,78 @@ class FeatureTransformer {
     }
 
     template<Color Perspective>
-    void update_accumulator_refresh(const Position& pos) const {
-#ifdef VECTOR
-        // Gcc-10.2 unnecessarily spills AVX2 registers if this array
-        // is defined in the VECTOR code below, once in each branch
-        vec_t      acc[NumRegs];
-        psqt_vec_t psqt[NumPsqtRegs];
-#endif
+    void update_accumulator_refresh(const Position& pos, AccumulatorCaches::Cache* cache) const {
+        assert(cache != nullptr);
 
-        // Refresh the accumulator
-        // Could be extracted to a separate function because it's done in 2 places,
-        // but it's unclear if compilers would correctly handle register allocation.
+        const Square ksq = pos.square<KING>(Perspective);
+        const int    ab  = pos.count<ADVISOR>(Perspective) * 3 + pos.count<BISHOP>(Perspective);
+
+        auto& entry = (*cache)[FeatureSet::KingCacheMaps[ksq] * 9 + ab];
+
         auto& accumulator                 = pos.state()->accumulator;
         accumulator.computed[Perspective] = true;
-        FeatureSet::IndexList active;
-        FeatureSet::append_active_indices<Perspective>(pos, active);
+
+        FeatureSet::IndexList removed, added;
+        for (Color c : {WHITE, BLACK})
+        {
+            for (PieceType pt = ROOK; pt <= KING; ++pt)
+            {
+                const Piece    piece = make_piece(c, pt);
+                const Bitboard oldBB =
+                  entry.byColorBB[Perspective][c] & entry.byTypeBB[Perspective][pt];
+                const Bitboard newBB    = pos.pieces(c, pt);
+                Bitboard       toRemove = oldBB & ~newBB;
+                Bitboard       toAdd    = newBB & ~oldBB;
+
+                while (toRemove)
+                {
+                    Square sq = pop_lsb(toRemove);
+                    removed.push_back(FeatureSet::make_index<Perspective>(sq, piece, ksq, ab));
+                }
+                while (toAdd)
+                {
+                    Square sq = pop_lsb(toAdd);
+                    added.push_back(FeatureSet::make_index<Perspective>(sq, piece, ksq, ab));
+                }
+            }
+        }
 
 #ifdef VECTOR
+        vec_t      acc[NumRegs];
+        psqt_vec_t psqt[NumPsqtRegs];
+
         for (IndexType j = 0; j < HalfDimensions / TileHeight; ++j)
         {
-            auto biasesTile = reinterpret_cast<const vec_t*>(&biases[j * TileHeight]);
+            auto entryTile =
+              reinterpret_cast<vec_t*>(&entry.accumulation[Perspective][j * TileHeight]);
             for (IndexType k = 0; k < NumRegs; ++k)
-                acc[k] = biasesTile[k];
+                acc[k] = entryTile[k];
 
-            for (const auto index : active)
+            int i0 = 0;
+            for (; i0 < int(std::min(removed.size(), added.size())); ++i0)
             {
+                IndexType       indexR  = removed[i0];
+                const IndexType offsetR = HalfDimensions * indexR + j * TileHeight;
+                auto            columnR = reinterpret_cast<const vec_t*>(&weights[offsetR]);
+                IndexType       indexA  = added[i0];
+                const IndexType offsetA = HalfDimensions * indexA + j * TileHeight;
+                auto            columnA = reinterpret_cast<const vec_t*>(&weights[offsetA]);
+
+                for (unsigned k = 0; k < NumRegs; ++k)
+                    acc[k] = vec_add_16(vec_sub_16(acc[k], columnR[k]), columnA[k]);
+            }
+            for (int i = i0; i < int(removed.size()); ++i)
+            {
+                IndexType       index  = removed[i];
+                const IndexType offset = HalfDimensions * index + j * TileHeight;
+                auto            column = reinterpret_cast<const vec_t*>(&weights[offset]);
+
+                for (unsigned k = 0; k < NumRegs; ++k)
+                    acc[k] = vec_sub_16(acc[k], column[k]);
+            }
+            for (int i = i0; i < int(added.size()); ++i)
+            {
+                IndexType       index  = added[i];
                 const IndexType offset = HalfDimensions * index + j * TileHeight;
                 auto            column = reinterpret_cast<const vec_t*>(&weights[offset]);
 
@@ -681,19 +763,29 @@ class FeatureTransformer {
                     acc[k] = vec_add_16(acc[k], column[k]);
             }
 
-            auto accTile =
-              reinterpret_cast<vec_t*>(&accumulator.accumulation[Perspective][j * TileHeight]);
-            for (unsigned k = 0; k < NumRegs; k++)
-                vec_store(&accTile[k], acc[k]);
+            for (IndexType k = 0; k < NumRegs; k++)
+                vec_store(&entryTile[k], acc[k]);
         }
 
         for (IndexType j = 0; j < PSQTBuckets / PsqtTileHeight; ++j)
         {
+            auto entryTilePsqt = reinterpret_cast<psqt_vec_t*>(
+              &entry.psqtAccumulation[Perspective][j * PsqtTileHeight]);
             for (std::size_t k = 0; k < NumPsqtRegs; ++k)
-                psqt[k] = vec_zero_psqt();
+                psqt[k] = entryTilePsqt[k];
 
-            for (const auto index : active)
+            for (int i = 0; i < int(removed.size()); ++i)
             {
+                IndexType       index  = removed[i];
+                const IndexType offset = PSQTBuckets * index + j * PsqtTileHeight;
+                auto columnPsqt        = reinterpret_cast<const psqt_vec_t*>(&psqtWeights[offset]);
+
+                for (std::size_t k = 0; k < NumPsqtRegs; ++k)
+                    psqt[k] = vec_sub_psqt_32(psqt[k], columnPsqt[k]);
+            }
+            for (int i = 0; i < int(added.size()); ++i)
+            {
+                IndexType       index  = added[i];
                 const IndexType offset = PSQTBuckets * index + j * PsqtTileHeight;
                 auto columnPsqt        = reinterpret_cast<const psqt_vec_t*>(&psqtWeights[offset]);
 
@@ -701,35 +793,52 @@ class FeatureTransformer {
                     psqt[k] = vec_add_psqt_32(psqt[k], columnPsqt[k]);
             }
 
-            auto accTilePsqt = reinterpret_cast<psqt_vec_t*>(
-              &accumulator.psqtAccumulation[Perspective][j * PsqtTileHeight]);
             for (std::size_t k = 0; k < NumPsqtRegs; ++k)
-                vec_store_psqt(&accTilePsqt[k], psqt[k]);
+                vec_store_psqt(&entryTilePsqt[k], psqt[k]);
         }
 
 #else
-        std::memcpy(accumulator.accumulation[Perspective], biases,
-                    HalfDimensions * sizeof(BiasType));
 
-        for (std::size_t k = 0; k < PSQTBuckets; ++k)
-            accumulator.psqtAccumulation[Perspective][k] = 0;
-
-        for (const auto index : active)
+        for (const auto index : removed)
         {
             const IndexType offset = HalfDimensions * index;
-
             for (IndexType j = 0; j < HalfDimensions; ++j)
-                accumulator.accumulation[Perspective][j] += weights[offset + j];
+                entry.accumulation[Perspective][j] -= weights[offset + j];
 
             for (std::size_t k = 0; k < PSQTBuckets; ++k)
-                accumulator.psqtAccumulation[Perspective][k] +=
-                  psqtWeights[index * PSQTBuckets + k];
+                entry.psqtAccumulation[Perspective][k] -= psqtWeights[index * PSQTBuckets + k];
         }
+        for (const auto index : added)
+        {
+            const IndexType offset = HalfDimensions * index;
+            for (IndexType j = 0; j < HalfDimensions; ++j)
+                entry.accumulation[Perspective][j] += weights[offset + j];
+
+            for (std::size_t k = 0; k < PSQTBuckets; ++k)
+                entry.psqtAccumulation[Perspective][k] += psqtWeights[index * PSQTBuckets + k];
+        }
+
 #endif
+
+        // The accumulator of the refresh entry has been updated.
+        // Now copy its content to the actual accumulator we were refreshing
+
+        std::memcpy(accumulator.psqtAccumulation[Perspective], entry.psqtAccumulation[Perspective],
+                    sizeof(int32_t) * PSQTBuckets);
+
+        std::memcpy(accumulator.accumulation[Perspective], entry.accumulation[Perspective],
+                    sizeof(BiasType) * HalfDimensions);
+
+        for (Color c : {WHITE, BLACK})
+            entry.byColorBB[Perspective][c] = pos.pieces(c);
+
+        for (PieceType pt = ROOK; pt <= KING; ++pt)
+            entry.byTypeBB[Perspective][pt] = pos.pieces(pt);
     }
 
     template<Color Perspective>
-    void hint_common_access_for_perspective(const Position& pos) const {
+    void hint_common_access_for_perspective(const Position&           pos,
+                                            AccumulatorCaches::Cache* cache) const {
 
         // Works like update_accumulator, but performs less work.
         // Updates ONLY the accumulator for pos.
@@ -749,11 +858,11 @@ class FeatureTransformer {
             update_accumulator_incremental<Perspective, 2>(pos, oldest_st, states_to_update);
         }
         else
-            update_accumulator_refresh<Perspective>(pos);
+            update_accumulator_refresh<Perspective>(pos, cache);
     }
 
     template<Color Perspective>
-    void update_accumulator(const Position& pos) const {
+    void update_accumulator(const Position& pos, AccumulatorCaches::Cache* cache) const {
 
         auto [oldest_st, next] = try_find_computed_accumulator<Perspective>(pos);
 
@@ -774,9 +883,11 @@ class FeatureTransformer {
         }
         else
         {
-            update_accumulator_refresh<Perspective>(pos);
+            update_accumulator_refresh<Perspective>(pos, cache);
         }
     }
+
+    friend struct AccumulatorCaches::Cache;
 
     alignas(CacheLineSize) BiasType biases[HalfDimensions];
     alignas(CacheLineSize) WeightType weights[HalfDimensions * InputDimensions];

@@ -24,17 +24,25 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
-#include <vector>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "misc.h"
 #include "movepick.h"
 #include "position.h"
+#include "score.h"
 #include "timeman.h"
 #include "types.h"
+#include "nnue/nnue_accumulator.h"
 
 namespace Stockfish {
+
+namespace Eval::NNUE {
+class Network;
+}
 
 // Different node types, used as a template parameter
 enum NodeType {
@@ -84,6 +92,7 @@ struct RootMove {
         return m.score != score ? m.score < score : m.previousScore < previousScore;
     }
 
+    uint64_t          effort          = 0;
     Value             score           = -VALUE_INFINITE;
     Value             previousScore   = -VALUE_INFINITE;
     Value             averageScore    = -VALUE_INFINITE;
@@ -97,38 +106,43 @@ struct RootMove {
 using RootMoves = std::vector<RootMove>;
 
 
-// LimitsType struct stores information sent by GUI about available time to
-// search the current move, maximum depth/time, or if we are in analysis mode.
+// LimitsType struct stores information sent by the caller about the analysis required.
 struct LimitsType {
     // Init explicitly due to broken value-initialization of non POD in MSVC
     LimitsType() {
         time[WHITE] = time[BLACK] = inc[WHITE] = inc[BLACK] = npmsec = movetime = TimePoint(0);
         movestogo = depth = mate = perft = infinite = 0;
         nodes                                       = 0;
+        ponderMode                                  = false;
     }
 
     bool use_time_management() const { return time[WHITE] || time[BLACK]; }
 
-    std::vector<Move> searchmoves;
-    TimePoint         time[COLOR_NB], inc[COLOR_NB], npmsec, movetime, startTime;
-    int               movestogo, depth, mate, perft, infinite;
-    uint64_t          nodes;
+    std::vector<std::string> searchmoves;
+    TimePoint                time[COLOR_NB], inc[COLOR_NB], npmsec, movetime, startTime;
+    int                      movestogo, depth, mate, perft, infinite;
+    uint64_t                 nodes;
+    bool                     ponderMode;
+    Square                   capSq;
 };
 
 
 // The UCI stores the uci options, thread pool, and transposition table.
 // This struct is used to easily forward data to the Search::Worker class.
 struct SharedState {
-    SharedState(const OptionsMap&   optionsMap,
-                ThreadPool&         threadPool,
-                TranspositionTable& transpositionTable) :
+    SharedState(const OptionsMap&          optionsMap,
+                ThreadPool&                threadPool,
+                TranspositionTable&        transpositionTable,
+                const Eval::NNUE::Network& net) :
         options(optionsMap),
         threads(threadPool),
-        tt(transpositionTable) {}
+        tt(transpositionTable),
+        network(net) {}
 
-    const OptionsMap&   options;
-    ThreadPool&         threads;
-    TranspositionTable& tt;
+    const OptionsMap&          options;
+    ThreadPool&                threads;
+    TranspositionTable&        tt;
+    const Eval::NNUE::Network& network;
 };
 
 class Worker;
@@ -141,16 +155,56 @@ class ISearchManager {
     virtual void check_time(Search::Worker&) = 0;
 };
 
+struct InfoShort {
+    int   depth;
+    Score score;
+};
+
+struct InfoFull: InfoShort {
+    int              selDepth;
+    size_t           multiPV;
+    std::string_view wdl;
+    std::string_view bound;
+    size_t           timeMs;
+    size_t           nodes;
+    size_t           nps;
+    size_t           tbHits;
+    std::string_view pv;
+    int              hashfull;
+};
+
+struct InfoIteration {
+    int              depth;
+    std::string_view currmove;
+    size_t           currmovenumber;
+};
+
 // SearchManager manages the search from the main thread. It is responsible for
 // keeping track of the time, and storing data strictly related to the main thread.
 class SearchManager: public ISearchManager {
    public:
+    using UpdateShort    = std::function<void(const InfoShort&)>;
+    using UpdateFull     = std::function<void(const InfoFull&)>;
+    using UpdateIter     = std::function<void(const InfoIteration&)>;
+    using UpdateBestmove = std::function<void(std::string_view, std::string_view)>;
+
+    struct UpdateContext {
+        UpdateShort    onUpdateNoMoves;
+        UpdateFull     onUpdateFull;
+        UpdateIter     onIter;
+        UpdateBestmove onBestmove;
+    };
+
+
+    SearchManager(const UpdateContext& updateContext) :
+        updates(updateContext) {}
+
     void check_time(Search::Worker& worker) override;
 
-    std::string pv(const Search::Worker&     worker,
-                   const ThreadPool&         threads,
-                   const TranspositionTable& tt,
-                   Depth                     depth) const;
+    void pv(const Search::Worker&     worker,
+            const ThreadPool&         threads,
+            const TranspositionTable& tt,
+            Depth                     depth) const;
 
     Stockfish::TimeManagement tm;
     int                       callsCnt;
@@ -163,12 +217,15 @@ class SearchManager: public ISearchManager {
     bool                 stopOnPonderhit;
 
     size_t id;
+
+    const UpdateContext& updates;
 };
 
 class NullSearchManager: public ISearchManager {
    public:
     void check_time(Search::Worker&) override {}
 };
+
 
 // Search::Worker is the class that does the actual search.
 // It is instantiated once per thread, and it is responsible for keeping track
@@ -215,7 +272,7 @@ class Worker {
         return static_cast<SearchManager*>(manager.get());
     }
 
-    std::array<std::array<uint64_t, SQUARE_NB>, SQUARE_NB> effort;
+    TimePoint elapsed() const;
 
     LimitsType limits;
 
@@ -239,9 +296,13 @@ class Worker {
     // The main thread has a SearchManager, the others have a NullSearchManager
     std::unique_ptr<ISearchManager> manager;
 
-    const OptionsMap&   options;
-    ThreadPool&         threads;
-    TranspositionTable& tt;
+    const OptionsMap&          options;
+    ThreadPool&                threads;
+    TranspositionTable&        tt;
+    const Eval::NNUE::Network& network;
+
+    // Used by NNUE
+    Eval::NNUE::AccumulatorCaches refreshTable;
 
     friend class Stockfish::ThreadPool;
     friend class SearchManager;

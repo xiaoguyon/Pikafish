@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,30 @@ void* aligned_large_pages_alloc(size_t size);
 void aligned_large_pages_free(void* mem);
 
 std::stringstream read_zipped_nnue(const std::string& fpath);
+
+// Deleter for automating release of memory area
+template<typename T>
+struct AlignedDeleter {
+    void operator()(T* ptr) const {
+        ptr->~T();
+        std_aligned_free(ptr);
+    }
+};
+
+template<typename T>
+struct LargePageDeleter {
+    void operator()(T* ptr) const {
+        ptr->~T();
+        aligned_large_pages_free(ptr);
+    }
+};
+
+template<typename T>
+using AlignedPtr = std::unique_ptr<T, AlignedDeleter<T>>;
+
+template<typename T>
+using LargePagePtr = std::unique_ptr<T, LargePageDeleter<T>>;
+
 
 void dbg_hit_on(bool cond, int slot = 0);
 void dbg_mean_of(int64_t value, int slot = 0);
@@ -176,19 +201,21 @@ inline uint64_t mul_hi64(uint64_t a, uint64_t b) {
 // called to set group affinity for each thread. Original code from Texel by
 // Peter Österlund.
 namespace WinProcGroup {
-void bindThisThread(size_t idx);
+void bind_this_thread(size_t idx);
 }
 
 
 struct CommandLine {
    public:
-    CommandLine(int, char**);
+    CommandLine(int _argc, char** _argv) :
+        argc(_argc),
+        argv(_argv) {}
+
+    static std::string get_binary_directory(std::string argv0);
+    static std::string get_working_directory();
 
     int    argc;
     char** argv;
-
-    std::string binaryDirectory;   // path of the executable directory
-    std::string workingDirectory;  // path of the working directory
 };
 
 namespace Utility {

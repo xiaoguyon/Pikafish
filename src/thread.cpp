@@ -24,7 +24,7 @@
 #include <memory>
 #include <unordered_map>
 #include <utility>
-#include <array>
+#include <string>
 
 #include "misc.h"
 #include "movegen.h"
@@ -33,6 +33,7 @@
 #include "tt.h"
 #include "types.h"
 #include "ucioption.h"
+#include "uci.h"
 
 namespace Stockfish {
 
@@ -65,6 +66,7 @@ Thread::~Thread() {
     stdThread.join();
 #endif
 }
+
 
 // Wakes up the thread that will start the search
 void Thread::start_searching() {
@@ -99,7 +101,7 @@ void Thread::idle_loop() {
     // just check if running threads are below a threshold, in this case all this
     // NUMA machinery is not needed.
     if (nthreads > 8)
-        WinProcGroup::bindThisThread(idx);
+        WinProcGroup::bind_this_thread(idx);
 
     while (true)
     {
@@ -121,7 +123,8 @@ void Thread::idle_loop() {
 // Creates/destroys threads to match the requested number.
 // Created and launched threads will immediately go to sleep in idle_loop.
 // Upon resizing, threads are recreated to allow for binding if necessary.
-void ThreadPool::set(Search::SharedState sharedState) {
+void ThreadPool::set(Search::SharedState                         sharedState,
+                     const Search::SearchManager::UpdateContext& updateContext) {
 
     if (threads.size() > 0)  // destroy any existing thread(s)
     {
@@ -135,14 +138,15 @@ void ThreadPool::set(Search::SharedState sharedState) {
 
     if (requested > 0)  // create new thread(s)
     {
-        threads.push_back(new Thread(
-          sharedState, std::unique_ptr<Search::ISearchManager>(new Search::SearchManager()), 0));
-
+        auto manager = std::make_unique<Search::SearchManager>(updateContext);
+        threads.push_back(new Thread(sharedState, std::move(manager), 0));
         #ifndef SINGLE_THREAD
         while (threads.size() < requested)
-            threads.push_back(new Thread(
-              sharedState, std::unique_ptr<Search::ISearchManager>(new Search::NullSearchManager()),
-              threads.size()));
+        {
+            auto null_manager = std::make_unique<Search::NullSearchManager>();
+            threads.push_back(new Thread(sharedState, std::move(null_manager), threads.size()));
+        }
+
         #endif
         clear();
 
@@ -170,23 +174,28 @@ void ThreadPool::clear() {
 
 // Wakes up main thread waiting in idle_loop() and
 // returns immediately. Main thread will wake up other threads and start the search.
-void ThreadPool::start_thinking(Position&          pos,
-                                StateListPtr&      states,
-                                Search::LimitsType limits,
-                                bool               ponderMode) {
+void ThreadPool::start_thinking(Position& pos, StateListPtr& states, Search::LimitsType limits) {
 
     main_thread()->wait_for_search_finished();
 
     main_manager()->stopOnPonderhit = stop = abortedSearch = false;
-    main_manager()->ponder                                 = ponderMode;
+    main_manager()->ponder                                 = limits.ponderMode;
 
     increaseDepth = true;
 
     Search::RootMoves rootMoves;
+    const auto        legalmoves = MoveList<LEGAL>(pos);
 
-    for (const auto& m : MoveList<LEGAL>(pos))
-        if (limits.searchmoves.empty()
-            || std::count(limits.searchmoves.begin(), limits.searchmoves.end(), m))
+    for (const auto& uciMove : limits.searchmoves)
+    {
+        auto move = UCIEngine::to_move(pos, uciMove);
+
+        if (std::find(legalmoves.begin(), legalmoves.end(), move) != legalmoves.end())
+            rootMoves.emplace_back(move);
+    }
+
+    if (rootMoves.empty())
+        for (const auto& m : legalmoves)
             rootMoves.emplace_back(m);
 
     // After ownership transfer 'states' becomes empty, so if we stop the search
@@ -209,7 +218,6 @@ void ThreadPool::start_thinking(Position&          pos,
         th->worker->rootMoves                              = rootMoves;
         th->worker->rootPos.set(pos, &th->worker->rootState);
         th->worker->rootState = setupStates->back();
-        th->worker->effort    = {};
     }
 
     main_thread()->start_searching();

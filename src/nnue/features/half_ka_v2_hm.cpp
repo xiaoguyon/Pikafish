@@ -23,7 +23,7 @@
 #include "../../bitboard.h"
 #include "../../position.h"
 #include "../../types.h"
-#include "../nnue_common.h"
+#include "../nnue_accumulator.h"
 
 namespace Stockfish::Eval::NNUE::Features {
 
@@ -36,21 +36,9 @@ inline IndexType HalfKAv2_hm::make_index(Square s, Piece pc, Square ksq) {
                      + PS_NB * ((KingBuckets[ksq] & 0x7)));
 }
 
-// Get a list of indices for active features
-template<Color Perspective>
-void HalfKAv2_hm::append_active_indices(const Position& pos, IndexList& active) {
-    Square   ksq = pos.square<KING>(Perspective);
-    Bitboard bb  = pos.pieces();
-    while (bb)
-    {
-        Square s = pop_lsb(bb);
-        active.push_back(make_index<Perspective>(s, pos.piece_on(s), ksq));
-    }
-}
-
 // Explicit template instantiations
-template void HalfKAv2_hm::append_active_indices<WHITE>(const Position& pos, IndexList& active);
-template void HalfKAv2_hm::append_active_indices<BLACK>(const Position& pos, IndexList& active);
+template IndexType HalfKAv2_hm::make_index<WHITE>(Square s, Piece pc, Square ksq, int ab);
+template IndexType HalfKAv2_hm::make_index<BLACK>(Square s, Piece pc, Square ksq, int ab);
 
 // Get a list of indices for recently changed features
 template<Color Perspective>

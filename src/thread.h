@@ -33,7 +33,6 @@
 
 namespace Stockfish {
 
-class OptionsMap;
 using Value = int;
 
 // Abstraction of a thread. It contains a pointer to the worker and a native thread.
@@ -83,18 +82,16 @@ class ThreadPool {
         }
     }
 
-    void start_thinking(Position&, StateListPtr&, Search::LimitsType, bool = false);
+    void start_thinking(Position&, StateListPtr&, Search::LimitsType);
     void clear();
-    void set(Search::SharedState);
+    void set(Search::SharedState, const Search::SearchManager::UpdateContext&);
 
-    Search::SearchManager* main_manager() const {
-        return static_cast<Search::SearchManager*>(main_thread()->worker.get()->manager.get());
-    };
-    Thread*  main_thread() const { return threads.front(); }
-    uint64_t nodes_searched() const { return accumulate(&Search::Worker::nodes); }
-    Thread*  get_best_thread() const;
-    void     start_searching();
-    void     wait_for_search_finished() const;
+    Search::SearchManager* main_manager();
+    Thread*                main_thread() const { return threads.front(); }
+    uint64_t               nodes_searched() const;
+    Thread*                get_best_thread() const;
+    void                   start_searching();
+    void                   wait_for_search_finished() const;
 
     std::atomic_bool stop, abortedSearch, increaseDepth;
 

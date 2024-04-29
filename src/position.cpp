@@ -24,7 +24,6 @@
 #include <cstddef>
 #include <cstring>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -72,7 +71,7 @@ std::ostream& operator<<(std::ostream& os, const Position& pos) {
        << std::setw(16) << pos.key() << std::setfill(' ') << std::dec << "\nCheckers: ";
 
     for (Bitboard b = pos.checkers(); b;)
-        os << UCI::square(pop_lsb(b)) << " ";
+        os << UCIEngine::square(pop_lsb(b)) << " ";
 
     return os;
 }
@@ -835,9 +834,12 @@ uint16_t Position::chased(Color c) {
 
             if (chase_legal(m))
             {
-                // Knight and Cannon attacks against protected rooks
+                // Attacks against stronger pieces
                 if ((attackerType == KNIGHT || attackerType == CANNON)
                     && type_of(piece_on(to)) == ROOK)
+                    chase |= (1 << idBoard[to]);
+                if ((attackerType == ADVISOR || attackerType == BISHOP)
+                    && type_of(piece_on(to)) & 1)
                     chase |= (1 << idBoard[to]);
                 // Attacks against potentially unprotected pieces
                 else
@@ -894,13 +896,12 @@ Value Position::detect_chases(int d, int ply) {
     Color us = sideToMove, them = ~us;
 
     // Rollback until we reached st - d
-    uint16_t rooks[COLOR_NB] = {0xFFFF, 0xFFFF};
     uint16_t chase[COLOR_NB] = {0xFFFF, 0xFFFF};
-    uint16_t newChase[COLOR_NB]{};
-    newChase[us] = chased(us);
     for (int i = 0; i < d; ++i)
     {
-        if (!chase[~sideToMove])
+        if (st->checkersBB)
+            return VALUE_DRAW;
+        else if (!chase[~sideToMove])
         {
             if (!chase[sideToMove])
                 break;
@@ -909,58 +910,22 @@ Value Position::detect_chases(int d, int ply) {
         }
         else
         {
-            if (st->checkersBB)
-            {
-                chase[~sideToMove] = rooks[~sideToMove] = 0;
-                light_undo_move(st->move, st->capturedPiece);
-                st = st->previous;
-            }
-            else
-            {
-                uint16_t oldChase = chased(~sideToMove);
-                // Calculate rooks pinned by knight
-                uint16_t flag = 0;
-                if (rooks[~sideToMove]
-                    && (blockers_for_king(sideToMove) & pieces(sideToMove, ROOK)))
-                {
-                    Bitboard knights = pinners(~sideToMove) & pieces(KNIGHT);
-                    while (knights)
-                    {
-                        Square   s = pop_lsb(knights);
-                        Bitboard b = between_bb(square<KING>(sideToMove), s) ^ s;
-                        s          = pop_lsb(b);
-                        if (piece_on(s) == make_piece(sideToMove, ROOK))
-                            flag |= 1 << idBoard[s];
-                    }
-                }
-                light_undo_move(st->move, st->capturedPiece);
-                st = st->previous;
-                // Take the exact diff to detect the chase
-                uint16_t chases      = oldChase & ~newChase[sideToMove];
-                newChase[sideToMove] = chased(sideToMove);
-                if (i == d - 2)
-                    chases &= ~newChase[sideToMove];
-                rooks[sideToMove] &= chases & flag;
-                chase[sideToMove] &= chases;
-            }
+            uint16_t after = chased(~sideToMove);
+            light_undo_move(st->move, st->capturedPiece);
+            st = st->previous;
+            // Take the exact diff to detect the chase
+            chase[sideToMove] &= after & ~chased(sideToMove);
         }
     }
 
-    // Overrides chases if rooks pinned by knight is being chased
-    if ((!chase[us] && !chase[them]) || (rooks[us] && rooks[them]))
-        return VALUE_DRAW;
-    else if (rooks[us])
-        return mated_in(ply);
-    else if (rooks[them])
-        return mate_in(ply);
-
-    return !chase[us] ? mate_in(ply) : !chase[them] ? mated_in(ply) : VALUE_DRAW;
+    return bool(chase[us]) ^ bool(chase[them]) ? chase[us] ? mated_in(ply) : mate_in(ply)
+                                               : VALUE_DRAW;
 }
 
 
 // Tests whether the position may end the game by rule 60, insufficient material, draw repetition,
 // perpetual check repetition or perpetual chase repetition that allows a player to claim a game result.
-bool Position::rule_judge(Value& result, int ply) const {
+bool Position::rule_judge(Value& result, int ply) {
 
     // Restore rule 60 by adding back the checks
     int end = std::min(st->rule60 + std::max(0, st->check10[WHITE] - 10)
@@ -997,8 +962,7 @@ bool Position::rule_judge(Value& result, int ply) const {
                     result = !checkUs ? mate_in(ply) : !checkThem ? mated_in(ply) : VALUE_DRAW;
 
                 // Catch false mates
-                if (result == VALUE_DRAW || cnt == 2
-                    || (filter[st->key] <= 1 && st->previous->key == stp->previous->key))
+                if (result == VALUE_DRAW || cnt == 2)
                     return true;
                 // We know there can't be another fold
                 if (filter[st->key] <= 1)
@@ -1010,48 +974,79 @@ bool Position::rule_judge(Value& result, int ply) const {
         }
     }
 
-    // Draw by insufficient material
-    if ([&] {
-            if (count<PAWN>() == 0)
-            {
-                // No attacking pieces left
-                if (!major_material())
-                    return true;
-
-                // Only one cannon left on the board
-                if (major_material() == CannonValue)
-                {
-                    // No advisors left on the board
-                    if (count<ADVISOR>() == 0)
-                        return true;
-
-                    // The side not holding the cannon can possess one advisor
-                    // The side holding the cannon should only have cannon
-                    if ((count<ALL_PIECES>(WHITE) == 2 && count<CANNON>(WHITE) == 1
-                         && count<ADVISOR>(BLACK) == 1)
-                        || (count<ALL_PIECES>(BLACK) == 2 && count<CANNON>(BLACK) == 1
-                            && count<ADVISOR>(WHITE) == 1))
-                        return true;
-                }
-
-                // Two cannons left on the board, one for each side, but no other pieces left on the board
-                if (count<ALL_PIECES>() == 4 && count<CANNON>(WHITE) == 1
-                    && count<CANNON>(BLACK) == 1)
-                    return true;
-            }
-
-            return false;
-        }())
-    {
-        result = VALUE_DRAW;
-        return true;
-    }
-
     // 60 move rule
     if (st->rule60 >= 120)
     {
         result = MoveList<LEGAL>(*this).size() ? VALUE_DRAW : mated_in(ply);
         return true;
+    }
+
+    // Draw by insufficient material
+    if (count<PAWN>() == 0)
+    {
+        enum DrawLevel : int {
+            NO_DRAW,      // There is no drawing situation exists
+            DIRECT_DRAW,  // A draw can be directly yielded without any checks
+            MATE_DRAW     // We need to check for mate before yielding a draw
+        };
+
+        int level = [&]() {
+            // No cannons left on the board
+            if (!major_material())
+                return DIRECT_DRAW;
+
+            // One cannon left on the board
+            if (major_material() == CannonValue)
+            {
+                // See which side is holding this cannon, and this side must not possess any advisors
+                Color cannonSide = major_material(WHITE) == CannonValue ? WHITE : BLACK;
+                if (count<ADVISOR>(cannonSide) == 0)
+                {
+                    // No advisors left on the board
+                    if (count<ADVISOR>(~cannonSide) == 0)
+                        return DIRECT_DRAW;
+
+                    // One advisor left on the board
+                    if (count<ADVISOR>(~cannonSide) == 1)
+                        return count<BISHOP>(cannonSide) == 0 ? DIRECT_DRAW : MATE_DRAW;
+
+                    // Two advisors left on the board
+                    if (count<BISHOP>(cannonSide) == 0)
+                        return MATE_DRAW;
+                }
+            }
+
+            // Two cannons left on the board, one for each side, and no advisors left on the board
+            if (major_material() == CannonValue * 2 && count<ADVISOR>() == 0
+                && count<CANNON>(WHITE) == 1 && count<CANNON>(BLACK) == 1)
+                return count<BISHOP>() == 0 ? DIRECT_DRAW : MATE_DRAW;
+
+            return NO_DRAW;
+        }();
+
+        if (level != NO_DRAW)
+        {
+            if (level == MATE_DRAW)
+            {
+                MoveList<LEGAL> moves(*this);
+                if (moves.size() == 0)
+                {
+                    result = mated_in(ply);
+                    return true;
+                }
+                for (const auto& move : moves)
+                {
+                    StateInfo tempSt;
+                    do_move(move, tempSt);
+                    bool mate = MoveList<LEGAL>(*this).size() == 0;
+                    undo_move(move);
+                    if (mate)
+                        return false;
+                }
+            }
+            result = VALUE_DRAW;
+            return true;
+        }
     }
 
     return false;
