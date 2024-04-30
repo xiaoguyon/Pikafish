@@ -120,6 +120,12 @@ void Thread::idle_loop() {
 #endif
 }
 
+Search::SearchManager* ThreadPool::main_manager() {
+    return static_cast<Search::SearchManager*>(main_thread()->worker.get()->manager.get());
+}
+
+uint64_t ThreadPool::nodes_searched() const { return accumulate(&Search::Worker::nodes); }
+
 // Creates/destroys threads to match the requested number.
 // Created and launched threads will immediately go to sleep in idle_loop.
 // Upon resizing, threads are recreated to allow for binding if necessary.

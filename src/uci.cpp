@@ -90,7 +90,7 @@ UCIEngine::UCIEngine(int argc, char** argv) :
 }
 
 void UCIEngine::loop() {
-
+    std::string cmd, token;
     EM_STATIC Position     pos;
     EM_STATIC StateListPtr states(new std::deque<StateInfo>(1));
     [[maybe_unused]] EM_STATIC auto __init_once = [&]() {
@@ -488,13 +488,13 @@ extern "C" void wasm_uci_execute() {
     char *argv[2] = {input.data(), input.data()};
     CommandLine cli(2, argv);
 
-    EM_STATIC std::unique_ptr<UCI> uci;
+    EM_STATIC std::unique_ptr<UCIEngine> uci;
     [[maybe_unused]] EM_STATIC auto __init_once = [&]() {
         Bitboards::init();
         Position::init();
-        uci = std::make_unique<UCI>(2, argv);
-        Tune::init(uci->options);
-        uci->evalFile = Eval::NNUE::load_networks(uci->workingDirectory(), uci->options, uci->evalFile);
+        uci = std::make_unique<UCIEngine>(2, argv);
+        Tune::init(uci->engine_options());
+        uci->engine.load_network(uci->engine_options()["EvalFile"]);
         return 0;
     }();
 

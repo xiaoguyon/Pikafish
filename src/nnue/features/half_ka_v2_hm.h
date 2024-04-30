@@ -144,7 +144,7 @@ class HalfKAv2_hm {
 
     // Index of a feature for a given king position and another piece on some square
     template<Color Perspective>
-    static IndexType make_index(Square s, Piece pc, Square ksq, int ab);
+    static IndexType make_index(Square s, Piece pc, Square ksq);
 
     // Get a list of indices for recently changed features
     template<Color Perspective>

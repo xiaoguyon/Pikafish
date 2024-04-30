@@ -37,8 +37,8 @@ inline IndexType HalfKAv2_hm::make_index(Square s, Piece pc, Square ksq) {
 }
 
 // Explicit template instantiations
-template IndexType HalfKAv2_hm::make_index<WHITE>(Square s, Piece pc, Square ksq, int ab);
-template IndexType HalfKAv2_hm::make_index<BLACK>(Square s, Piece pc, Square ksq, int ab);
+template IndexType HalfKAv2_hm::make_index<WHITE>(Square s, Piece pc, Square ksq);
+template IndexType HalfKAv2_hm::make_index<BLACK>(Square s, Piece pc, Square ksq);
 
 // Get a list of indices for recently changed features
 template<Color Perspective>

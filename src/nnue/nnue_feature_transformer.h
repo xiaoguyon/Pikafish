@@ -688,9 +688,8 @@ class FeatureTransformer {
         assert(cache != nullptr);
 
         const Square ksq = pos.square<KING>(Perspective);
-        const int    ab  = pos.count<ADVISOR>(Perspective) * 3 + pos.count<BISHOP>(Perspective);
 
-        auto& entry = (*cache)[FeatureSet::KingCacheMaps[ksq] * 9 + ab];
+        auto& entry = (*cache)[FeatureSet::KingCacheMaps[ksq] * 9];
 
         auto& accumulator                 = pos.state()->accumulator;
         accumulator.computed[Perspective] = true;
@@ -710,12 +709,12 @@ class FeatureTransformer {
                 while (toRemove)
                 {
                     Square sq = pop_lsb(toRemove);
-                    removed.push_back(FeatureSet::make_index<Perspective>(sq, piece, ksq, ab));
+                    removed.push_back(FeatureSet::make_index<Perspective>(sq, piece, ksq));
                 }
                 while (toAdd)
                 {
                     Square sq = pop_lsb(toAdd);
-                    added.push_back(FeatureSet::make_index<Perspective>(sq, piece, ksq, ab));
+                    added.push_back(FeatureSet::make_index<Perspective>(sq, piece, ksq));
                 }
             }
         }

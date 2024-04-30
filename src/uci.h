@@ -53,9 +53,10 @@ class UCIEngine {
     static Search::LimitsType parse_limits(std::istream& is);
 
     auto& engine_options() { return engine.get_options(); }
-
-   private:
     Engine      engine;
+    
+   private:
+
     CommandLine cli;
 
     void          go(std::istringstream& is);
